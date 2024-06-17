@@ -1,0 +1,307 @@
+import javax.swing.*;
+import javax.swing.table.DefaultTableModel;
+import java.awt.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.io.File;
+import java.text.DecimalFormat;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import javax.swing.Timer;
+
+public class FileExplorerApp extends JFrame {
+    private JTextField searchPatternField;
+    private JTextField directoryField;
+    private JCheckBox fileCheckBox;
+    private JCheckBox folderCheckBox;
+    private JTextField commandField;
+    private JTable resultTable;
+    private DefaultTableModel tableModel;
+    private List<File> allResults;
+    private int maxRecursionDepth = Integer.MAX_VALUE;
+    private int minRecursionDepth = 0;
+    private int maxHorizontal = Integer.MAX_VALUE;
+    private SearchTask currentTask;
+    private Timer timer;
+    private long startTime;
+
+    private JLabel filesScannedLabel;
+    private JLabel foldersScannedLabel;
+    private JLabel filesMatchedLabel;
+    private JLabel foldersMatchedLabel;
+    private JLabel elapsedTimeLabel;
+
+    private int filesScanned = 0;
+    private int foldersScanned = 0;
+    private int filesMatched = 0;
+    private int foldersMatched = 0;
+
+    public FileExplorerApp() {
+        setTitle("File Explorer Application");
+        setSize(1920, 1200);
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setLocationRelativeTo(null);
+
+        allResults = new ArrayList<>();
+
+        JPanel panel = new JPanel();
+        panel.setLayout(new GridLayout(8, 1));
+
+        // Search pattern input
+        JPanel searchPanel = new JPanel();
+        searchPanel.add(new JLabel("Search Pattern (Regex):"));
+        searchPatternField = new JTextField(20);
+        searchPanel.add(searchPatternField);
+        panel.add(searchPanel);
+
+        // Directory input
+        JPanel directoryPanel = new JPanel();
+        directoryPanel.add(new JLabel("Directory:"));
+        directoryField = new JTextField(20);
+        directoryPanel.add(directoryField);
+        panel.add(directoryPanel);
+
+        // File and folder checkboxes
+        JPanel checkBoxPanel = new JPanel();
+        fileCheckBox = new JCheckBox("File");
+        folderCheckBox = new JCheckBox("Folder");
+        checkBoxPanel.add(fileCheckBox);
+        checkBoxPanel.add(folderCheckBox);
+        panel.add(checkBoxPanel);
+
+        // Command input
+        JPanel commandPanel = new JPanel();
+        commandPanel.add(new JLabel("Commands:"));
+        commandField = new JTextField(30);
+        commandPanel.add(commandField);
+        panel.add(commandPanel);
+
+        // Max Recursion Depth 0 button
+        JButton maxRecursionDepthButton = new JButton("Max Recursion Depth 0");
+        maxRecursionDepthButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                maxRecursionDepth = 0;
+            }
+        });
+        panel.add(maxRecursionDepthButton);
+
+        // Stop button
+        JButton stopButton = new JButton("Stop");
+        stopButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (currentTask != null && !currentTask.isDone()) {
+                    currentTask.cancel(true);
+                    timer.stop();
+                }
+            }
+        });
+        panel.add(stopButton);
+
+        // Search button
+        JButton searchButton = new JButton("Search");
+        searchButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (currentTask != null && !currentTask.isDone()) {
+                    currentTask.cancel(true);
+                }
+                parseCommands();
+                startSearch();
+            }
+        });
+        panel.add(searchButton);
+
+        // Statistics display
+        JPanel statsPanel = new JPanel();
+        statsPanel.setLayout(new GridLayout(2, 3));
+
+        filesScannedLabel = new JLabel("Files Scanned: 0");
+        foldersScannedLabel = new JLabel("Folders Scanned: 0");
+        filesMatchedLabel = new JLabel("Files Matched: 0");
+        foldersMatchedLabel = new JLabel("Folders Matched: 0");
+        elapsedTimeLabel = new JLabel("Elapsed Time: 0.000s");
+
+        statsPanel.add(filesScannedLabel);
+        statsPanel.add(foldersScannedLabel);
+        statsPanel.add(filesMatchedLabel);
+        statsPanel.add(foldersMatchedLabel);
+        statsPanel.add(elapsedTimeLabel);
+
+        panel.add(statsPanel);
+
+        // Result table
+        String[] columnNames = {"Absolute Path"};
+        tableModel = new DefaultTableModel(columnNames, 0);
+        resultTable = new JTable(tableModel);
+
+        JScrollPane scrollPane = new JScrollPane(resultTable);
+        scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
+
+        add(panel, BorderLayout.NORTH);
+        add(scrollPane, BorderLayout.CENTER);
+    }
+
+    private void parseCommands() {
+        String commands = commandField.getText();
+        maxRecursionDepth = Integer.MAX_VALUE;
+        minRecursionDepth = 0;
+        maxHorizontal = Integer.MAX_VALUE;
+
+        String[] commandArray = commands.split("\\s+");
+        for (String command : commandArray) {
+            if (command.startsWith("-maxRecursionDepth=")) {
+                try {
+                    maxRecursionDepth = Integer.parseInt(command.substring(19));
+                } catch (NumberFormatException e) {
+                    maxRecursionDepth = Integer.MAX_VALUE;
+                }
+            } else if (command.startsWith("-minRecursionDepth=")) {
+                try {
+                    minRecursionDepth = Integer.parseInt(command.substring(19));
+                } catch (NumberFormatException e) {
+                    minRecursionDepth = 0;
+                }
+            } else if (command.startsWith("-maxHorizontal=")) {
+                try {
+                    maxHorizontal = Integer.parseInt(command.substring(15));
+                } catch (NumberFormatException e) {
+                    maxHorizontal = Integer.MAX_VALUE;
+                }
+            }
+        }
+    }
+
+    private void startSearch() {
+        String pattern = searchPatternField.getText();
+        String directoryPath = directoryField.getText();
+        File directory = new File(directoryPath);
+
+        if (directory.exists() && directory.isDirectory()) {
+            tableModel.setRowCount(0); // Clear previous results
+            allResults.clear(); // Clear previous allResults
+            filesScanned = 0;
+            foldersScanned = 0;
+            filesMatched = 0;
+            foldersMatched = 0;
+            startTime = System.nanoTime();
+
+            currentTask = new SearchTask(directory, pattern, 0);
+            currentTask.execute();
+
+            timer = new Timer(100, new ActionListener() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    long elapsedTime = System.nanoTime() - startTime;
+                    elapsedTimeLabel.setText(String.format("Elapsed Time: %.3f s", elapsedTime / 1e9));
+                }
+            });
+            timer.start();
+        } else {
+            JOptionPane.showMessageDialog(this, "Invalid directory!", "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void updateDisplay() {
+        tableModel.setRowCount(0); // Clear current display
+
+        for (File file : allResults) {
+            if (file.isFile() && fileCheckBox.isSelected()) {
+                tableModel.addRow(new Object[]{file.getAbsolutePath()});
+            } else if (file.isDirectory() && folderCheckBox.isSelected()) {
+                tableModel.addRow(new Object[]{file.getAbsolutePath()});
+            }
+        }
+    }
+
+    private class SearchTask extends SwingWorker<List<File>, File> {
+        private final File directory;
+        private final String pattern;
+        private final Pattern regexPattern;
+        private final int currentDepth;
+
+        public SearchTask(File directory, String pattern, int currentDepth) {
+            this.directory = directory;
+            this.pattern = pattern;
+            this.regexPattern = Pattern.compile(pattern);
+            this.currentDepth = currentDepth;
+        }
+
+        @Override
+        protected List<File> doInBackground() {
+            searchFilesRecursive(directory, currentDepth);
+            return allResults;
+        }
+
+        private void searchFilesRecursive(File directory, int depth) {
+            if (depth > maxRecursionDepth || isCancelled()) {
+                return;
+            }
+
+            File[] files = directory.listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    if (isCancelled()) return;
+
+                    if (file.isDirectory()) {
+                        foldersScanned++;
+                        if (depth >= minRecursionDepth && folderCheckBox.isSelected()) {
+                            Matcher matcher = regexPattern.matcher(file.getName());
+                            if (matcher.find()) {
+                                foldersMatched++;
+                                publish(file);
+                            }
+                        }
+                        searchFilesRecursive(file, depth + 1);
+                    } else {
+                        filesScanned++;
+                        if (depth >= minRecursionDepth && fileCheckBox.isSelected()) {
+                            Matcher matcher = regexPattern.matcher(file.getName());
+                            if (matcher.find()) {
+                                filesMatched++;
+                                publish(file);
+                            }
+                        }
+                    }
+                }
+            }
+
+            filesScannedLabel.setText("Files Scanned: " + filesScanned);
+            foldersScannedLabel.setText("Folders Scanned: " + foldersScanned);
+            filesMatchedLabel.setText("Files Matched: " + filesMatched);
+            foldersMatchedLabel.setText("Folders Matched: " + foldersMatched);
+        }
+
+        @Override
+        protected void process(List<File> chunks) {
+            for (File file : chunks) {
+                if ((file.isFile() && fileCheckBox.isSelected()) || (file.isDirectory() && folderCheckBox.isSelected())) {
+                    tableModel.addRow(new Object[]{file.getAbsolutePath()});
+                }
+            }
+        }
+
+        @Override
+        protected void done() {
+            try {
+                get(); // Ensure any exceptions are thrown
+            } catch (Exception e) {
+                e.printStackTrace();
+            } finally {
+                timer.stop();
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(new Runnable() {
+            @Override
+            public void run() {
+                new FileExplorerApp().setVisible(true);
+            }
+        });
+    }
+}
